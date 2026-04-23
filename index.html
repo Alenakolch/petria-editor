@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Petria Editor — онлайн редактор BPMN-схем</title>
   <script src="https://unpkg.com/bpmn-js@17/dist/bpmn-modeler.development.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/bpmn-js@17/dist/assets/diagram-js.css">
+  <link rel="stylesheet" href="https://unpkg.com/bpmn-js@17/dist/assets/bpmn-js.css">
+  <link rel="stylesheet" href="https://unpkg.com/bpmn-js@17/dist/assets/bpmn-font/css/bpmn-embedded.css">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -134,10 +137,15 @@
       background: white;
     }
 
-    /* bpmn-js внутренние стили */
+    /* bpmn-js палитра и холст */
     .bjs-container {
       width: 100% !important;
       height: 100% !important;
+    }
+
+    .djs-palette {
+      top: 10px !important;
+      left: 10px !important;
     }
 
     /* ── СТАТУСБАР ── */
