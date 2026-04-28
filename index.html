@@ -359,6 +359,64 @@
     .sim-log-entry.error   { color: #f87171; }
     .sim-log-entry.done    { color: #6ee7b7; font-weight: 600; }
     .sim-log-entry.wait    { color: #94a3b8; font-style: italic; }
+
+    /* ── ПАЛИТРА ЦВЕТОВ ── */
+    .color-group { display: none; align-items: center; gap: 6px; }
+    .color-group.visible { display: flex; }
+
+    .color-swatch {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 1px #d0d0d0;
+      cursor: pointer;
+      padding: 0;
+      transition: transform 0.1s, box-shadow 0.1s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      color: #888;
+    }
+    .color-swatch:hover { transform: scale(1.12); box-shadow: 0 0 0 2px #1B4F72; }
+    .color-swatch.reset { background: white; }
+
+    /* ── СПИСОК СОХРАНЁННЫХ СХЕМ ── */
+    .schemas-list {
+      list-style: none;
+      max-height: 320px;
+      overflow-y: auto;
+      margin: 4px -4px 16px -4px;
+      padding: 0;
+    }
+    .schemas-list-item {
+      padding: 10px 12px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid transparent;
+      margin-bottom: 4px;
+    }
+    .schemas-list-item:hover { background: #f5f7fa; border-color: #e0e0e0; }
+    .schemas-list-info { flex: 1; min-width: 0; }
+    .schemas-list-name {
+      font-weight: 600;
+      color: #1B4F72;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .schemas-list-meta { font-size: 11px; color: #888; margin-top: 2px; }
+    .schemas-list-empty {
+      padding: 24px;
+      text-align: center;
+      color: #888;
+      font-size: 13px;
+    }
+    .schemas-list-actions { display: flex; gap: 6px; flex-shrink: 0; }
   </style>
 </head>
 <body>
@@ -423,6 +481,30 @@
         🗎 Лог
       </button>
     </div>
+
+    <div class="toolbar-divider"></div>
+
+    <div class="toolbar-group">
+      <button class="btn" onclick="saveSchemaPrompt()">
+        💾 Сохранить
+      </button>
+      <button class="btn" onclick="openSchemasModal()">
+        📂 Мои схемы
+      </button>
+    </div>
+
+    <div class="toolbar-divider"></div>
+
+    <div class="toolbar-group color-group" id="color-group">
+      <span class="toolbar-label">Цвет:</span>
+      <button class="color-swatch" data-fill="#fef5e7" data-stroke="#d35400" style="background:#fef5e7;border-color:#d35400" title="Жёлтый"></button>
+      <button class="color-swatch" data-fill="#e8f5e9" data-stroke="#1B7724" style="background:#e8f5e9;border-color:#1B7724" title="Зелёный"></button>
+      <button class="color-swatch" data-fill="#fdf0ef" data-stroke="#c0392b" style="background:#fdf0ef;border-color:#c0392b" title="Красный"></button>
+      <button class="color-swatch" data-fill="#e8f3fb" data-stroke="#1B4F72" style="background:#e8f3fb;border-color:#1B4F72" title="Синий"></button>
+      <button class="color-swatch" data-fill="#f3e8fa" data-stroke="#8e44ad" style="background:#f3e8fa;border-color:#8e44ad" title="Фиолетовый"></button>
+      <button class="color-swatch" data-fill="#fff8e1" data-stroke="#f39c12" style="background:#fff8e1;border-color:#f39c12" title="Оранжевый"></button>
+      <button class="color-swatch reset" data-reset="1" title="Сбросить цвет">×</button>
+    </div>
   </div>
 
   <!-- CANVAS -->
@@ -450,6 +532,18 @@
     </div>
     <div class="sim-log-body" id="sim-log-body">
       <div class="sim-log-entry" style="color:#94a3b8">Нажмите «▶ Запустить», чтобы прогнать схему.</div>
+    </div>
+  </div>
+
+  <!-- SCHEMAS MODAL -->
+  <div class="modal-overlay" id="schemas-modal">
+    <div class="modal" style="width:520px">
+      <h3>Мои схемы</h3>
+      <p>Сохраняются локально в браузере. При очистке кэша теряются — для долгого хранения скачивай XML.</p>
+      <ul class="schemas-list" id="schemas-list"></ul>
+      <div class="modal-buttons">
+        <button class="btn" onclick="closeSchemasModal()">Закрыть</button>
+      </div>
     </div>
   </div>
 
@@ -717,6 +811,237 @@
       var shouldOpen = (force === undefined) ? !panel.classList.contains('open') : !!force;
       panel.classList.toggle('open', shouldOpen);
     }
+
+    // ── РАЗРЕШИТЬ РЕЗАЙЗ КРУЖКОВ И РОМБОВ ──────────────────────────
+    // По умолчанию bpmn-js не даёт менять размер событий и шлюзов
+    // (это противоречит BPMN-стандарту, но визуально нам нужно).
+    // Мы переопределяем правило `shape.resize` на уровне rules.allowed.
+    (function enableResizeAll() {
+      try {
+        var rules = modeler.get('rules');
+        var origAllowed = rules.allowed.bind(rules);
+        rules.allowed = function (action, context) {
+          if (action === 'shape.resize' && context && context.shape) {
+            var t = context.shape.type || '';
+            // Помимо стандартных Task/SubProcess разрешаем events и gateways.
+            if (
+              t === 'bpmn:StartEvent' ||
+              t === 'bpmn:EndEvent' ||
+              t === 'bpmn:IntermediateThrowEvent' ||
+              t === 'bpmn:IntermediateCatchEvent' ||
+              t === 'bpmn:BoundaryEvent' ||
+              t === 'bpmn:ExclusiveGateway' ||
+              t === 'bpmn:ParallelGateway' ||
+              t === 'bpmn:InclusiveGateway' ||
+              t === 'bpmn:EventBasedGateway' ||
+              t === 'bpmn:ComplexGateway'
+            ) {
+              return true;
+            }
+          }
+          return origAllowed(action, context);
+        };
+        // Минимальные размеры для кружков/ромбов, чтобы не схлопывались до точки.
+        var bpmnRules = modeler.get('bpmnRules');
+        var origCanResize = bpmnRules.canResize && bpmnRules.canResize.bind(bpmnRules);
+        bpmnRules.canResize = function (shape, newBounds) {
+          if (newBounds && (newBounds.width < 16 || newBounds.height < 16)) return false;
+          if (origCanResize) {
+            var r = origCanResize(shape, newBounds);
+            if (r === false) {
+              // Если оригинал запрещает только из-за типа — всё равно разрешим
+              // нашим типам, чьим ресайзом мы хотим управлять.
+              var t = shape && shape.type;
+              if (t && (t.indexOf('Event') !== -1 || t.indexOf('Gateway') !== -1)) return true;
+              return false;
+            }
+          }
+          return true;
+        };
+      } catch (e) {
+        console.warn('Не удалось включить резайз для events/gateways:', e);
+      }
+    })();
+
+    // ── ПАЛИТРА ЦВЕТОВ ─────────────────────────────────────────────
+    (function setupColors() {
+      var group = document.getElementById('color-group');
+
+      modeler.on('selection.changed', function (e) {
+        var sel = e.newSelection || [];
+        // Палитру показываем, только если выбрано хотя бы что-то цветное.
+        var colorable = sel.filter(function (el) {
+          return el && el.type && el.type !== 'label';
+        });
+        group.classList.toggle('visible', colorable.length > 0);
+      });
+
+      group.querySelectorAll('.color-swatch').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var sel = modeler.get('selection').get();
+          if (sel.length === 0) {
+            showToast('Сначала выдели элемент');
+            return;
+          }
+          var modeling = modeler.get('modeling');
+          if (btn.dataset.reset) {
+            modeling.setColor(sel, { fill: null, stroke: null });
+            showToast('Цвет сброшен');
+          } else {
+            modeling.setColor(sel, {
+              fill: btn.dataset.fill,
+              stroke: btn.dataset.stroke
+            });
+            showToast('Цвет применён');
+          }
+        });
+      });
+    })();
+
+    // ── ЛОКАЛЬНОЕ СОХРАНЕНИЕ СХЕМ ─────────────────────────────────
+    var SCHEMAS_KEY = 'petria:schemas';
+
+    function loadSchemas() {
+      try {
+        return JSON.parse(localStorage.getItem(SCHEMAS_KEY)) || {};
+      } catch (e) {
+        return {};
+      }
+    }
+
+    function persistSchemas(map) {
+      try {
+        localStorage.setItem(SCHEMAS_KEY, JSON.stringify(map));
+        return true;
+      } catch (e) {
+        // Скорее всего переполнение localStorage.
+        showToast('Не удалось сохранить (нет места)');
+        return false;
+      }
+    }
+
+    async function saveSchemaPrompt() {
+      var defaultName = 'Схема ' + new Date().toLocaleDateString('ru-RU');
+      var name = prompt('Название схемы:', defaultName);
+      if (!name) return;
+      name = name.trim();
+      if (!name) return;
+
+      try {
+        var result = await modeler.saveXML({ format: true });
+        var schemas = loadSchemas();
+        var existed = !!schemas[name];
+        if (existed && !confirm('Схема "' + name + '" уже существует. Перезаписать?')) {
+          return;
+        }
+        schemas[name] = {
+          name: name,
+          xml: result.xml,
+          savedAt: new Date().toISOString()
+        };
+        if (persistSchemas(schemas)) {
+          setStatus('Сохранено: ' + name);
+          showToast(existed ? 'Схема обновлена' : 'Схема сохранена');
+        }
+      } catch (e) {
+        showToast('Ошибка сохранения');
+      }
+    }
+
+    function openSchemasModal() {
+      renderSchemasList();
+      document.getElementById('schemas-modal').classList.add('open');
+    }
+
+    function closeSchemasModal() {
+      document.getElementById('schemas-modal').classList.remove('open');
+    }
+
+    function renderSchemasList() {
+      var schemas = loadSchemas();
+      var list = document.getElementById('schemas-list');
+      var keys = Object.keys(schemas);
+      list.innerHTML = '';
+
+      if (keys.length === 0) {
+        var empty = document.createElement('li');
+        empty.className = 'schemas-list-empty';
+        empty.textContent = 'Пока нет сохранённых схем. Нажмите «💾 Сохранить» в тулбаре.';
+        list.appendChild(empty);
+        return;
+      }
+
+      keys.sort(function (a, b) {
+        return (schemas[b].savedAt || '').localeCompare(schemas[a].savedAt || '');
+      }).forEach(function (key) {
+        var s = schemas[key];
+        var li = document.createElement('li');
+        li.className = 'schemas-list-item';
+
+        var info = document.createElement('div');
+        info.className = 'schemas-list-info';
+        var nameEl = document.createElement('div');
+        nameEl.className = 'schemas-list-name';
+        nameEl.textContent = s.name;
+        var metaEl = document.createElement('div');
+        metaEl.className = 'schemas-list-meta';
+        metaEl.textContent = s.savedAt
+          ? new Date(s.savedAt).toLocaleString('ru-RU')
+          : '';
+        info.appendChild(nameEl);
+        info.appendChild(metaEl);
+        li.appendChild(info);
+
+        var actions = document.createElement('div');
+        actions.className = 'schemas-list-actions';
+
+        var loadBtn = document.createElement('button');
+        loadBtn.className = 'btn btn-primary';
+        loadBtn.textContent = 'Открыть';
+        loadBtn.onclick = function () { loadSchemaByKey(key); };
+        actions.appendChild(loadBtn);
+
+        var delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-danger';
+        delBtn.textContent = 'Удалить';
+        delBtn.onclick = function () {
+          if (confirm('Удалить схему «' + s.name + '»?')) {
+            deleteSchemaByKey(key);
+          }
+        };
+        actions.appendChild(delBtn);
+
+        li.appendChild(actions);
+        list.appendChild(li);
+      });
+    }
+
+    function loadSchemaByKey(key) {
+      var schemas = loadSchemas();
+      var s = schemas[key];
+      if (!s) return;
+      modeler.importXML(s.xml).then(function () {
+        fitView();
+        closeSchemasModal();
+        setStatus('Загружено: ' + s.name);
+        showToast('Схема «' + s.name + '» загружена');
+      }).catch(function () {
+        showToast('Ошибка загрузки схемы');
+      });
+    }
+
+    function deleteSchemaByKey(key) {
+      var schemas = loadSchemas();
+      delete schemas[key];
+      persistSchemas(schemas);
+      renderSchemasList();
+      showToast('Схема удалена');
+    }
+
+    // Закрытие модалки схем по клику на overlay
+    document.getElementById('schemas-modal').addEventListener('click', function (e) {
+      if (e.target === this) closeSchemasModal();
+    });
   </script>
 </body>
 </html>
