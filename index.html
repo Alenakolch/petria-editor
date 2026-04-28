@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Petria Editor — онлайн редактор BPMN-схем</title>
   <script src="https://unpkg.com/bpmn-js@17/dist/bpmn-modeler.development.js"></script>
+  <script src="engine.js" defer></script>
   <link rel="stylesheet" href="https://unpkg.com/bpmn-js@17/dist/assets/diagram-js.css">
   <link rel="stylesheet" href="https://unpkg.com/bpmn-js@17/dist/assets/bpmn-js.css">
   <link rel="stylesheet" href="https://unpkg.com/bpmn-js@17/dist/assets/bpmn-font/css/bpmn-embedded.css">
@@ -270,6 +271,94 @@
     }
 
     .donate-close:hover { color: #999; }
+
+    /* ── СИМУЛЯЦИЯ ── */
+    .btn-run { color: #1B7724; border-color: #b3e0bb; }
+    .btn-run:hover { background: #effaf1; }
+    .btn-run.active { background: #1B7724; color: white; border-color: #1B7724; }
+
+    .btn-stop { color: #c0392b; border-color: #e0b0ac; }
+    .btn-stop:hover { background: #fdf0ef; }
+
+    /* Подсветка активных элементов во время симуляции */
+    .djs-element.simulation-active .djs-visual > :nth-child(1) {
+      stroke: #d35400 !important;
+      stroke-width: 3px !important;
+      fill: #fef5e7 !important;
+    }
+    .djs-element.simulation-active .djs-visual > circle {
+      filter: drop-shadow(0 0 6px rgba(211, 84, 0, 0.6));
+    }
+    .djs-element.simulation-active .djs-visual > rect {
+      filter: drop-shadow(0 0 6px rgba(211, 84, 0, 0.5));
+    }
+
+    /* Лог-панель симуляции */
+    .sim-log {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      width: 340px;
+      max-height: 300px;
+      background: #1f2933;
+      color: #e2e8f0;
+      border-radius: 10px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+      font-family: 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 12px;
+      display: none;
+      flex-direction: column;
+      z-index: 200;
+      overflow: hidden;
+    }
+    .sim-log.open { display: flex; }
+    .sim-log-header {
+      padding: 8px 12px;
+      background: #2d3a44;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #3b4955;
+    }
+    .sim-log-title { font-weight: 600; color: #fff; }
+    .sim-log-state {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: #475a6a;
+      margin-left: 8px;
+    }
+    .sim-log-state.running { background: #1B7724; color: white; }
+    .sim-log-state.done    { background: #1B4F72; color: white; }
+    .sim-log-state.stopped { background: #c0392b; color: white; }
+    .sim-log-state.error   { background: #c0392b; color: white; }
+    .sim-log-close {
+      cursor: pointer;
+      color: #94a3b8;
+      font-size: 16px;
+      padding: 0 6px;
+    }
+    .sim-log-close:hover { color: #fff; }
+    .sim-log-body {
+      padding: 8px 12px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .sim-log-entry {
+      padding: 3px 0;
+      border-bottom: 1px solid #2d3a44;
+      line-height: 1.4;
+    }
+    .sim-log-entry:last-child { border-bottom: none; }
+    .sim-log-time { color: #64748b; margin-right: 6px; }
+    .sim-log-entry.start   { color: #6ee7b7; }
+    .sim-log-entry.end     { color: #93c5fd; }
+    .sim-log-entry.task    { color: #fbbf24; }
+    .sim-log-entry.gateway { color: #c4b5fd; }
+    .sim-log-entry.warn    { color: #f59e0b; }
+    .sim-log-entry.error   { color: #f87171; }
+    .sim-log-entry.done    { color: #6ee7b7; font-weight: 600; }
+    .sim-log-entry.wait    { color: #94a3b8; font-style: italic; }
   </style>
 </head>
 <body>
@@ -320,6 +409,20 @@
         ⊞ По размеру
       </button>
     </div>
+
+    <div class="toolbar-divider"></div>
+
+    <div class="toolbar-group">
+      <button class="btn btn-run" id="btn-run" onclick="runSimulation()">
+        ▶ Запустить
+      </button>
+      <button class="btn btn-stop" id="btn-stop" onclick="stopSimulation()" disabled style="opacity:0.5;cursor:not-allowed">
+        ⏹ Стоп
+      </button>
+      <button class="btn" onclick="toggleLog()">
+        🗎 Лог
+      </button>
+    </div>
   </div>
 
   <!-- CANVAS -->
@@ -335,6 +438,20 @@
 
   <!-- TOAST -->
   <div class="toast" id="toast"></div>
+
+  <!-- SIMULATION LOG -->
+  <div class="sim-log" id="sim-log">
+    <div class="sim-log-header">
+      <span>
+        <span class="sim-log-title">Симуляция</span>
+        <span class="sim-log-state" id="sim-log-state">idle</span>
+      </span>
+      <span class="sim-log-close" onclick="toggleLog(false)">×</span>
+    </div>
+    <div class="sim-log-body" id="sim-log-body">
+      <div class="sim-log-entry" style="color:#94a3b8">Нажмите «▶ Запустить», чтобы прогнать схему.</div>
+    </div>
+  </div>
 
   <!-- CONFIRM MODAL -->
   <div class="modal-overlay" id="confirm-modal">
@@ -514,6 +631,92 @@
     document.getElementById('confirm-modal').addEventListener('click', function(e) {
       if (e.target === this) closeModal();
     });
+
+    // ── СИМУЛЯТОР BPMN ─────────────────────────────────────────────
+    var simulator = null;
+
+    function ensureSimulator() {
+      if (simulator) return simulator;
+      if (typeof BpmnSimulator === 'undefined') {
+        showToast('Движок симуляции не загружен');
+        return null;
+      }
+      simulator = new BpmnSimulator(modeler, {
+        tickSpeed: 900,
+        onLog: appendLogEntry,
+        onStateChange: updateSimState
+      });
+      return simulator;
+    }
+
+    function appendLogEntry(entry) {
+      var body = document.getElementById('sim-log-body');
+      // На первом сообщении очищаем подсказку.
+      if (body.dataset.cleared !== '1') {
+        body.innerHTML = '';
+        body.dataset.cleared = '1';
+      }
+      var div = document.createElement('div');
+      div.className = 'sim-log-entry ' + (entry.kind || 'info');
+      div.innerHTML = '<span class="sim-log-time">' + entry.time + '</span>' +
+        escapeHtml(entry.message);
+      body.appendChild(div);
+      body.scrollTop = body.scrollHeight;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function updateSimState(state) {
+      var stateEl = document.getElementById('sim-log-state');
+      stateEl.textContent = state;
+      stateEl.className = 'sim-log-state ' + state;
+
+      var runBtn = document.getElementById('btn-run');
+      var stopBtn = document.getElementById('btn-stop');
+      if (state === 'running') {
+        runBtn.classList.add('active');
+        runBtn.textContent = '▶ Идёт…';
+        stopBtn.disabled = false;
+        stopBtn.style.opacity = '1';
+        stopBtn.style.cursor = 'pointer';
+        setStatus('Симуляция запущена');
+      } else {
+        runBtn.classList.remove('active');
+        runBtn.textContent = '▶ Запустить';
+        stopBtn.disabled = true;
+        stopBtn.style.opacity = '0.5';
+        stopBtn.style.cursor = 'not-allowed';
+        if (state === 'done')    setStatus('Симуляция завершена');
+        if (state === 'stopped') setStatus('Симуляция остановлена');
+      }
+    }
+
+    function runSimulation() {
+      var sim = ensureSimulator();
+      if (!sim) return;
+      // Очищаем тело лога перед новым запуском.
+      var body = document.getElementById('sim-log-body');
+      body.innerHTML = '';
+      body.dataset.cleared = '1';
+      toggleLog(true);
+      sim.start();
+    }
+
+    function stopSimulation() {
+      if (!simulator) return;
+      simulator.stop();
+    }
+
+    function toggleLog(force) {
+      var panel = document.getElementById('sim-log');
+      var shouldOpen = (force === undefined) ? !panel.classList.contains('open') : !!force;
+      panel.classList.toggle('open', shouldOpen);
+    }
   </script>
 </body>
 </html>
