@@ -813,51 +813,36 @@
     }
 
     // ── РАЗРЕШИТЬ РЕЗАЙЗ КРУЖКОВ И РОМБОВ ──────────────────────────
-    // По умолчанию bpmn-js не даёт менять размер событий и шлюзов
-    // (это противоречит BPMN-стандарту, но визуально нам нужно).
-    // Мы переопределяем правило `shape.resize` на уровне rules.allowed.
+    // По умолчанию bpmn-js не даёт менять размер событий и шлюзов.
+    // Регистрируем listener на правило `shape.resize` с приоритетом
+    // выше дефолтного (1000) — он гарантированно отрабатывает первым,
+    // и через event.stopPropagation() блокирует дальнейшие правила.
     (function enableResizeAll() {
       try {
-        var rules = modeler.get('rules');
-        var origAllowed = rules.allowed.bind(rules);
-        rules.allowed = function (action, context) {
-          if (action === 'shape.resize' && context && context.shape) {
-            var t = context.shape.type || '';
-            // Помимо стандартных Task/SubProcess разрешаем events и gateways.
-            if (
-              t === 'bpmn:StartEvent' ||
-              t === 'bpmn:EndEvent' ||
-              t === 'bpmn:IntermediateThrowEvent' ||
-              t === 'bpmn:IntermediateCatchEvent' ||
-              t === 'bpmn:BoundaryEvent' ||
-              t === 'bpmn:ExclusiveGateway' ||
-              t === 'bpmn:ParallelGateway' ||
-              t === 'bpmn:InclusiveGateway' ||
-              t === 'bpmn:EventBasedGateway' ||
-              t === 'bpmn:ComplexGateway'
-            ) {
-              return true;
+        var eventBus = modeler.get('eventBus');
+
+        function addCustomRule(action, priority, fn) {
+          eventBus.on(action, priority, function (event) {
+            var result = fn(event);
+            if (result !== undefined) {
+              event.stopPropagation();
+              return result;
             }
+          });
+        }
+
+        addCustomRule('shape.resize', 1500, function (event) {
+          var shape = event.shape;
+          if (!shape || !shape.type) return;
+          var t = shape.type;
+          // Разрешаем все события и шлюзы, у которых обычно фиксированный размер.
+          if (t.indexOf('Event') !== -1 || t.indexOf('Gateway') !== -1) {
+            var nb = event.newBounds;
+            if (nb && (nb.width < 16 || nb.height < 16)) return false;
+            return true;
           }
-          return origAllowed(action, context);
-        };
-        // Минимальные размеры для кружков/ромбов, чтобы не схлопывались до точки.
-        var bpmnRules = modeler.get('bpmnRules');
-        var origCanResize = bpmnRules.canResize && bpmnRules.canResize.bind(bpmnRules);
-        bpmnRules.canResize = function (shape, newBounds) {
-          if (newBounds && (newBounds.width < 16 || newBounds.height < 16)) return false;
-          if (origCanResize) {
-            var r = origCanResize(shape, newBounds);
-            if (r === false) {
-              // Если оригинал запрещает только из-за типа — всё равно разрешим
-              // нашим типам, чьим ресайзом мы хотим управлять.
-              var t = shape && shape.type;
-              if (t && (t.indexOf('Event') !== -1 || t.indexOf('Gateway') !== -1)) return true;
-              return false;
-            }
-          }
-          return true;
-        };
+          // Для остального — undefined, чтобы сработали дефолтные правила.
+        });
       } catch (e) {
         console.warn('Не удалось включить резайз для events/gateways:', e);
       }
