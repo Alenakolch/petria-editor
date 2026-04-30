@@ -361,8 +361,7 @@
     .sim-log-entry.wait    { color: #94a3b8; font-style: italic; }
 
     /* ── ПАЛИТРА ЦВЕТОВ ── */
-    .color-group { display: none; align-items: center; gap: 6px; }
-    .color-group.visible { display: flex; }
+    .color-group { display: flex; align-items: center; gap: 6px; }
 
     .color-swatch {
       width: 26px;
@@ -601,10 +600,39 @@
       '</bpmn:definitions>'
     ].join('\n');
 
-    // Загрузить схему из URL-параметра ?load= или пустую
+    // Загрузить схему: ?load=URL → автосохранение → пустая
     window.addEventListener('load', function() {
       var params = new URLSearchParams(window.location.search);
       var loadUrl = params.get('load');
+
+      function finishImport(statusMsg) {
+        fitView();
+        setStatus(statusMsg);
+        // Включаем автосохранение только после успешной загрузки,
+        // иначе первый же импорт перезапишет автосейв.
+        autosaveEnabled = true;
+      }
+
+      function loadEmptyOrAutosave() {
+        var saved = null;
+        try { saved = localStorage.getItem(AUTOSAVE_KEY); } catch (e) {}
+        if (saved) {
+          modeler.importXML(saved).then(function () {
+            finishImport('Восстановлена несохранённая работа');
+            showToast('Восстановлено из автосохранения');
+          }).catch(function () {
+            // Автосейв битый — выкидываем и грузим пустую.
+            try { localStorage.removeItem(AUTOSAVE_KEY); } catch (e) {}
+            modeler.importXML(EMPTY_XML).then(function () {
+              finishImport('Новая схема');
+            });
+          });
+        } else {
+          modeler.importXML(EMPTY_XML).then(function () {
+            finishImport('Новая схема');
+          });
+        }
+      }
 
       if (loadUrl) {
         setStatus('Загрузка схемы...');
@@ -614,19 +642,15 @@
             return modeler.importXML(xml);
           })
           .then(function() {
-            fitView();
-            setStatus('Схема загружена из библиотеки');
+            finishImport('Схема загружена из библиотеки');
             showToast('Схема загружена');
           })
           .catch(function() {
-            modeler.importXML(EMPTY_XML);
+            loadEmptyOrAutosave();
             setStatus('Не удалось загрузить схему — открыта новая');
           });
       } else {
-        modeler.importXML(EMPTY_XML).then(function() {
-          fitView();
-          setStatus('Новая схема');
-        });
+        loadEmptyOrAutosave();
       }
 
       // Показать donate banner через 30 секунд
@@ -812,11 +836,13 @@
       panel.classList.toggle('open', shouldOpen);
     }
 
-    // ── РАЗРЕШИТЬ РЕЗАЙЗ КРУЖКОВ И РОМБОВ ──────────────────────────
-    // По умолчанию bpmn-js не даёт менять размер событий и шлюзов.
-    // Регистрируем listener на правило `shape.resize` с приоритетом
-    // выше дефолтного (1000) — он гарантированно отрабатывает первым,
-    // и через event.stopPropagation() блокирует дальнейшие правила.
+    // ── РАЗРЕШИТЬ РЕЗАЙЗ ВСЕХ ФИГУР ────────────────────────────────
+    // По умолчанию bpmn-js разрешает резайз только Task, SubProcess (expanded),
+    // Lane, Participant и TextAnnotation. События, шлюзы, DataObject,
+    // DataStore, Group и схлопнутые SubProcess резайзить нельзя.
+    // Регистрируем listener на правило `shape.resize` с приоритетом 1500 —
+    // он отрабатывает первым и через stopPropagation() блокирует дефолт,
+    // так что разрешаем тянуть все шейпы кроме лейблов и стрелок.
     (function enableResizeAll() {
       try {
         var eventBus = modeler.get('eventBus');
@@ -835,32 +861,27 @@
           var shape = event.shape;
           if (!shape || !shape.type) return;
           var t = shape.type;
-          // Разрешаем все события и шлюзы, у которых обычно фиксированный размер.
-          if (t.indexOf('Event') !== -1 || t.indexOf('Gateway') !== -1) {
-            var nb = event.newBounds;
-            if (nb && (nb.width < 16 || nb.height < 16)) return false;
-            return true;
+          // Лейблы (подписи) пропускаем — у них свои правила.
+          if (t === 'label') return;
+          // Соединения резайзить нет смысла, но они и не дойдут сюда — на всякий.
+          if (t === 'bpmn:SequenceFlow' || t === 'bpmn:MessageFlow' ||
+              t === 'bpmn:Association' || t === 'bpmn:DataInputAssociation' ||
+              t === 'bpmn:DataOutputAssociation') {
+            return;
           }
-          // Для остального — undefined, чтобы сработали дефолтные правила.
+          var nb = event.newBounds;
+          if (nb && (nb.width < 16 || nb.height < 16)) return false;
+          return true;
         });
       } catch (e) {
-        console.warn('Не удалось включить резайз для events/gateways:', e);
+        console.warn('Не удалось включить резайз всех фигур:', e);
       }
     })();
 
     // ── ПАЛИТРА ЦВЕТОВ ─────────────────────────────────────────────
+    // Палитра всегда видна. Цвет применяется к текущему выделению.
     (function setupColors() {
       var group = document.getElementById('color-group');
-
-      modeler.on('selection.changed', function (e) {
-        var sel = e.newSelection || [];
-        // Палитру показываем, только если выбрано хотя бы что-то цветное.
-        var colorable = sel.filter(function (el) {
-          return el && el.type && el.type !== 'label';
-        });
-        group.classList.toggle('visible', colorable.length > 0);
-      });
-
       group.querySelectorAll('.color-swatch').forEach(function (btn) {
         btn.addEventListener('click', function () {
           var sel = modeler.get('selection').get();
@@ -882,6 +903,28 @@
         });
       });
     })();
+
+    // ── АВТОСОХРАНЕНИЕ ТЕКУЩЕЙ СХЕМЫ ──────────────────────────────
+    // Каждое изменение сохраняем в localStorage с задержкой 500мс,
+    // чтобы при F5 / случайной перезагрузке не терять работу.
+    var AUTOSAVE_KEY = 'petria:autosave';
+    var autosaveTimer = null;
+    var autosaveEnabled = false;
+
+    function scheduleAutosave() {
+      if (!autosaveEnabled) return;
+      clearTimeout(autosaveTimer);
+      autosaveTimer = setTimeout(function () {
+        modeler.saveXML({ format: false }).then(function (result) {
+          try {
+            localStorage.setItem(AUTOSAVE_KEY, result.xml);
+          } catch (e) { /* квота — игнор */ }
+        }).catch(function () { /* пропускаем — диаграмма ещё не валидна */ });
+      }, 500);
+    }
+
+    modeler.on('commandStack.changed', scheduleAutosave);
+    modeler.on('elements.changed', scheduleAutosave);
 
     // ── ЛОКАЛЬНОЕ СОХРАНЕНИЕ СХЕМ ─────────────────────────────────
     var SCHEMAS_KEY = 'petria:schemas';
