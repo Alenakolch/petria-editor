@@ -550,9 +550,10 @@
   <div class="modal-overlay" id="confirm-modal">
     <div class="modal">
       <h3>Создать новую схему?</h3>
-      <p>Текущая схема будет очищена. Сохрани её через «Скачать XML» если нужно.</p>
+      <p>Текущая схема будет очищена. Можешь сначала сохранить её — она появится в «📂 Мои схемы».</p>
       <div class="modal-buttons">
         <button class="btn" onclick="closeModal()">Отмена</button>
+        <button class="btn btn-primary" onclick="saveAndNew()">💾 Сохранить и очистить</button>
         <button class="btn btn-danger" onclick="confirmNew()">Очистить</button>
       </div>
     </div>
@@ -618,8 +619,8 @@
         try { saved = localStorage.getItem(AUTOSAVE_KEY); } catch (e) {}
         if (saved) {
           modeler.importXML(saved).then(function () {
-            finishImport('Восстановлена несохранённая работа');
-            showToast('Восстановлено из автосохранения');
+            // Тихое восстановление без тоста и без статусного сообщения.
+            finishImport('Готово к работе');
           }).catch(function () {
             // Автосейв битый — выкидываем и грузим пустую.
             try { localStorage.removeItem(AUTOSAVE_KEY); } catch (e) {}
@@ -680,6 +681,14 @@
         setStatus('Новая схема');
         showToast('Схема очищена');
       });
+    }
+
+    async function saveAndNew() {
+      // Сохраняем текущую схему через стандартный диалог;
+      // если пользователь отменил ввод имени — не очищаем.
+      var saved = await saveSchemaPrompt();
+      if (!saved) return;
+      confirmNew();
     }
 
     document.getElementById('upload-input').addEventListener('change', function(e) {
@@ -839,13 +848,26 @@
     // ── РАЗРЕШИТЬ РЕЗАЙЗ ВСЕХ ФИГУР ────────────────────────────────
     // По умолчанию bpmn-js разрешает резайз только Task, SubProcess (expanded),
     // Lane, Participant и TextAnnotation. События, шлюзы, DataObject,
-    // DataStore, Group и схлопнутые SubProcess резайзить нельзя.
-    // Регистрируем listener на правило `shape.resize` с приоритетом 1500 —
-    // он отрабатывает первым и через stopPropagation() блокирует дефолт,
-    // так что разрешаем тянуть все шейпы кроме лейблов и стрелок.
+    // DataStore, Group и схлопнутые SubProcess — нет.
+    //
+    // bpmn-js дёргает rules.allowed('shape.resize') как для отображения
+    // зелёных хендлов, так и при коммите через commandStack — поэтому
+    // вешаем обработчик на оба пути с приоритетом выше дефолтного и
+    // через stopPropagation блокируем родную BpmnRules.
     (function enableResizeAll() {
       try {
         var eventBus = modeler.get('eventBus');
+
+        function isResizableType(t) {
+          if (!t) return false;
+          if (t === 'label') return false;
+          if (t === 'bpmn:SequenceFlow' || t === 'bpmn:MessageFlow' ||
+              t === 'bpmn:Association' || t === 'bpmn:DataInputAssociation' ||
+              t === 'bpmn:DataOutputAssociation') {
+            return false;
+          }
+          return true;
+        }
 
         function addCustomRule(action, priority, fn) {
           eventBus.on(action, priority, function (event) {
@@ -857,22 +879,20 @@
           });
         }
 
-        addCustomRule('shape.resize', 1500, function (event) {
-          var shape = event.shape;
-          if (!shape || !shape.type) return;
-          var t = shape.type;
-          // Лейблы (подписи) пропускаем — у них свои правила.
-          if (t === 'label') return;
-          // Соединения резайзить нет смысла, но они и не дойдут сюда — на всякий.
-          if (t === 'bpmn:SequenceFlow' || t === 'bpmn:MessageFlow' ||
-              t === 'bpmn:Association' || t === 'bpmn:DataInputAssociation' ||
-              t === 'bpmn:DataOutputAssociation') {
-            return;
-          }
-          var nb = event.newBounds;
+        function decide(event) {
+          var ctx = event.context || event;
+          var shape = ctx.shape || event.shape;
+          if (!shape || !isResizableType(shape.type)) return;
+          var nb = ctx.newBounds || event.newBounds;
           if (nb && (nb.width < 16 || nb.height < 16)) return false;
           return true;
-        });
+        }
+
+        // 1) Запрос на отрисовку зелёных хендлов и базовое правило.
+        addCustomRule('shape.resize', 1500, decide);
+        // 2) Проверка перед коммитом команды — на случай, если рулс-движок
+        //    решит сначала спросить commandStack-канал.
+        addCustomRule('commandStack.shape.resize.canExecute', 1500, decide);
       } catch (e) {
         console.warn('Не удалось включить резайз всех фигур:', e);
       }
@@ -948,19 +968,22 @@
       }
     }
 
+    // Возвращает true, если схема реально записалась в localStorage,
+    // и false, если пользователь отменил или произошла ошибка —
+    // saveAndNew() использует это, чтобы не очищать холст после отмены.
     async function saveSchemaPrompt() {
       var defaultName = 'Схема ' + new Date().toLocaleDateString('ru-RU');
       var name = prompt('Название схемы:', defaultName);
-      if (!name) return;
+      if (!name) return false;
       name = name.trim();
-      if (!name) return;
+      if (!name) return false;
 
       try {
         var result = await modeler.saveXML({ format: true });
         var schemas = loadSchemas();
         var existed = !!schemas[name];
         if (existed && !confirm('Схема "' + name + '" уже существует. Перезаписать?')) {
-          return;
+          return false;
         }
         schemas[name] = {
           name: name,
@@ -970,9 +993,12 @@
         if (persistSchemas(schemas)) {
           setStatus('Сохранено: ' + name);
           showToast(existed ? 'Схема обновлена' : 'Схема сохранена');
+          return true;
         }
+        return false;
       } catch (e) {
         showToast('Ошибка сохранения');
+        return false;
       }
     }
 
