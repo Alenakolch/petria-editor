@@ -379,7 +379,17 @@
       color: #888;
     }
     .color-swatch:hover { transform: scale(1.12); box-shadow: 0 0 0 2px #1B4F72; }
+    .color-swatch.active {
+      transform: scale(1.08);
+      box-shadow: 0 0 0 2px #1B4F72, 0 0 0 4px rgba(27, 79, 114, 0.18);
+    }
     .color-swatch.reset { background: white; }
+    /* Чёрно-белый свотч = «без цвета» (стандартный BPMN-вид).
+       Половина-на-половину, чтобы визуально читалось как «нейтральный». */
+    .color-swatch.default-color {
+      background: linear-gradient(135deg, #ffffff 0%, #ffffff 50%, #2c3e50 50%, #2c3e50 100%);
+      border-color: #fff;
+    }
 
     /* ── СПИСОК СОХРАНЁННЫХ СХЕМ ── */
     .schemas-list {
@@ -496,13 +506,14 @@
 
     <div class="toolbar-group color-group" id="color-group">
       <span class="toolbar-label">Цвет:</span>
+      <button class="color-swatch default-color active" data-default="1" title="Чёрно-белый (по умолчанию)"></button>
       <button class="color-swatch" data-fill="#fef5e7" data-stroke="#d35400" style="background:#fef5e7;border-color:#d35400" title="Жёлтый"></button>
       <button class="color-swatch" data-fill="#e8f5e9" data-stroke="#1B7724" style="background:#e8f5e9;border-color:#1B7724" title="Зелёный"></button>
       <button class="color-swatch" data-fill="#fdf0ef" data-stroke="#c0392b" style="background:#fdf0ef;border-color:#c0392b" title="Красный"></button>
       <button class="color-swatch" data-fill="#e8f3fb" data-stroke="#1B4F72" style="background:#e8f3fb;border-color:#1B4F72" title="Синий"></button>
       <button class="color-swatch" data-fill="#f3e8fa" data-stroke="#8e44ad" style="background:#f3e8fa;border-color:#8e44ad" title="Фиолетовый"></button>
       <button class="color-swatch" data-fill="#fff8e1" data-stroke="#f39c12" style="background:#fff8e1;border-color:#f39c12" title="Оранжевый"></button>
-      <button class="color-swatch reset" data-reset="1" title="Сбросить цвет">×</button>
+      <button class="color-swatch reset" data-reset="1" title="Сбросить цвет у выделенного">×</button>
     </div>
   </div>
 
@@ -899,30 +910,80 @@
     })();
 
     // ── ПАЛИТРА ЦВЕТОВ ─────────────────────────────────────────────
-    // Палитра всегда видна. Цвет применяется к текущему выделению.
+    // Палитра всегда видна. Активный свотч задаёт «текущий цвет»,
+    // которым рисуются новые фигуры/стрелки. Клик по свотчу:
+    //   1) делает его активным,
+    //   2) если есть выделение — применяет цвет к выделенному.
+    // Кнопка × сбрасывает цвет у выделенного, не трогая активный свотч.
+    var currentColor = { fill: null, stroke: null }; // null = чёрно-белый
+
     (function setupColors() {
       var group = document.getElementById('color-group');
+
+      function setActiveSwatch(btn) {
+        group.querySelectorAll('.color-swatch.active').forEach(function (b) {
+          b.classList.remove('active');
+        });
+        btn.classList.add('active');
+      }
+
       group.querySelectorAll('.color-swatch').forEach(function (btn) {
         btn.addEventListener('click', function () {
           var sel = modeler.get('selection').get();
-          if (sel.length === 0) {
-            showToast('Сначала выдели элемент');
-            return;
-          }
           var modeling = modeler.get('modeling');
+
+          // Кнопка × — только сброс выделения, без смены активного цвета.
           if (btn.dataset.reset) {
+            if (sel.length === 0) {
+              showToast('Сначала выдели элемент');
+              return;
+            }
             modeling.setColor(sel, { fill: null, stroke: null });
             showToast('Цвет сброшен');
+            return;
+          }
+
+          // Любой другой свотч — становится активным.
+          setActiveSwatch(btn);
+          if (btn.dataset.default) {
+            currentColor = { fill: null, stroke: null };
           } else {
-            modeling.setColor(sel, {
+            currentColor = {
               fill: btn.dataset.fill,
               stroke: btn.dataset.stroke
-            });
-            showToast('Цвет применён');
+            };
+          }
+
+          // Если что-то выделено — применяем сразу.
+          if (sel.length > 0) {
+            modeling.setColor(sel, currentColor);
+            showToast(btn.dataset.default ? 'Цвет сброшен' : 'Цвет применён');
           }
         });
       });
     })();
+
+    // Применяем активный цвет к каждому новому шейпу/коннекшну.
+    // Слушаем postExecuted команд create — на этот момент элемент уже
+    // в модели, но ещё в той же транзакции, так что setColor пристёгивается
+    // к тому же чанку истории команд.
+    modeler.on(
+      ['commandStack.shape.create.postExecuted',
+       'commandStack.connection.create.postExecuted'],
+      function (event) {
+        if (!currentColor || (!currentColor.fill && !currentColor.stroke)) return;
+        var ctx = event.context || {};
+        var element = ctx.shape || ctx.connection;
+        if (!element) return;
+        // Откладываем на следующий тик, чтобы команда create полностью
+        // зафиксировалась в стеке прежде чем мы её перекрашиваем.
+        setTimeout(function () {
+          try {
+            modeler.get('modeling').setColor([element], currentColor);
+          } catch (e) { /* элемент уже мог быть удалён */ }
+        }, 0);
+      }
+    );
 
     // ── АВТОСОХРАНЕНИЕ ТЕКУЩЕЙ СХЕМЫ ──────────────────────────────
     // Каждое изменение сохраняем в localStorage с задержкой 500мс,
