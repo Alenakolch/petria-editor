@@ -550,9 +550,10 @@
   <div class="modal-overlay" id="confirm-modal">
     <div class="modal">
       <h3>Создать новую схему?</h3>
-      <p>Текущая схема будет очищена. Сохрани её через «Скачать XML» если нужно.</p>
+      <p>Текущая схема будет очищена. Можешь сначала сохранить её — она появится в «📂 Мои схемы».</p>
       <div class="modal-buttons">
         <button class="btn" onclick="closeModal()">Отмена</button>
+        <button class="btn btn-primary" onclick="saveAndNew()">💾 Сохранить и очистить</button>
         <button class="btn btn-danger" onclick="confirmNew()">Очистить</button>
       </div>
     </div>
@@ -680,6 +681,14 @@
         setStatus('Новая схема');
         showToast('Схема очищена');
       });
+    }
+
+    async function saveAndNew() {
+      // Сохраняем текущую схему через стандартный диалог;
+      // если пользователь отменил ввод имени — не очищаем.
+      var saved = await saveSchemaPrompt();
+      if (!saved) return;
+      confirmNew();
     }
 
     document.getElementById('upload-input').addEventListener('change', function(e) {
@@ -959,19 +968,22 @@
       }
     }
 
+    // Возвращает true, если схема реально записалась в localStorage,
+    // и false, если пользователь отменил или произошла ошибка —
+    // saveAndNew() использует это, чтобы не очищать холст после отмены.
     async function saveSchemaPrompt() {
       var defaultName = 'Схема ' + new Date().toLocaleDateString('ru-RU');
       var name = prompt('Название схемы:', defaultName);
-      if (!name) return;
+      if (!name) return false;
       name = name.trim();
-      if (!name) return;
+      if (!name) return false;
 
       try {
         var result = await modeler.saveXML({ format: true });
         var schemas = loadSchemas();
         var existed = !!schemas[name];
         if (existed && !confirm('Схема "' + name + '" уже существует. Перезаписать?')) {
-          return;
+          return false;
         }
         schemas[name] = {
           name: name,
@@ -981,9 +993,12 @@
         if (persistSchemas(schemas)) {
           setStatus('Сохранено: ' + name);
           showToast(existed ? 'Схема обновлена' : 'Схема сохранена');
+          return true;
         }
+        return false;
       } catch (e) {
         showToast('Ошибка сохранения');
+        return false;
       }
     }
 
